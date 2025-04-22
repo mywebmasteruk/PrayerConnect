@@ -1,5 +1,5 @@
 import { prayers, type Prayer, type InsertPrayer, users, type User, type InsertUser } from "@shared/schema";
-import { eq, and, ilike, or, desc } from "drizzle-orm";
+import { eq, and, ilike, or, desc, sql } from "drizzle-orm";
 import { db } from "./db";
 
 export interface IStorage {
@@ -21,14 +21,14 @@ export interface IStorage {
 
 export class DatabaseStorage implements IStorage {
   async getPrayers(page: number, limit: number, category?: string, search?: string): Promise<Prayer[]> {
-    let query = db.select().from(prayers).where(eq(prayers.is_published, true));
+    let conditions = [eq(prayers.is_published, true)];
     
     if (category && category !== 'all') {
-      query = query.where(eq(prayers.category, category));
+      conditions.push(eq(prayers.category, category));
     }
     
     if (search) {
-      query = query.where(
+      conditions.push(
         or(
           ilike(prayers.content, `%${search}%`),
           ilike(prayers.author || '', `%${search}%`)
@@ -36,7 +36,9 @@ export class DatabaseStorage implements IStorage {
       );
     }
     
-    const prayerResults = await query
+    const prayerResults = await db.select()
+      .from(prayers)
+      .where(and(...conditions))
       .orderBy(desc(prayers.created_at))
       .limit(limit)
       .offset((page - 1) * limit);
@@ -45,7 +47,9 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getPrayer(id: number): Promise<Prayer | undefined> {
-    const [prayer] = await db.select().from(prayers).where(eq(prayers.id, id));
+    const [prayer] = await db.select()
+      .from(prayers)
+      .where(eq(prayers.id, id));
     return prayer;
   }
 
@@ -75,7 +79,9 @@ export class DatabaseStorage implements IStorage {
   }
 
   async deletePrayer(id: number): Promise<boolean> {
-    const result = await db.delete(prayers).where(eq(prayers.id, id)).returning();
+    const result = await db.delete(prayers)
+      .where(eq(prayers.id, id))
+      .returning();
     return result.length > 0;
   }
 
@@ -86,7 +92,7 @@ export class DatabaseStorage implements IStorage {
     const [result] = await db.update(prayers)
       .set({ ameen_count: (prayer.ameen_count || 0) + 1 })
       .where(eq(prayers.id, id))
-      .returning({ id: prayers.id });
+      .returning();
     
     return !!result;
   }
@@ -98,21 +104,20 @@ export class DatabaseStorage implements IStorage {
     const [result] = await db.update(prayers)
       .set({ view_count: (prayer.view_count || 0) + 1 })
       .where(eq(prayers.id, id))
-      .returning({ id: prayers.id });
+      .returning();
     
     return !!result;
   }
 
   async getTotalPrayers(category?: string, search?: string): Promise<number> {
-    let query = db.select({ count: db.fn.count() }).from(prayers)
-      .where(eq(prayers.is_published, true));
+    let conditions = [eq(prayers.is_published, true)];
     
     if (category && category !== 'all') {
-      query = query.where(eq(prayers.category, category));
+      conditions.push(eq(prayers.category, category));
     }
     
     if (search) {
-      query = query.where(
+      conditions.push(
         or(
           ilike(prayers.content, `%${search}%`),
           ilike(prayers.author || '', `%${search}%`)
@@ -120,23 +125,29 @@ export class DatabaseStorage implements IStorage {
       );
     }
     
-    const [result] = await query;
-    return Number(result.count);
+    const result = await db.select({ count: sql<number>`count(*)` })
+      .from(prayers)
+      .where(and(...conditions));
+    
+    return result.length > 0 ? Number(result[0].count) : 0;
   }
 
   async getUser(id: number): Promise<User | undefined> {
-    const [user] = await db.select().from(users).where(eq(users.id, id));
+    const [user] = await db.select()
+      .from(users)
+      .where(eq(users.id, id));
     return user || undefined;
   }
 
   async getUserByUsername(username: string): Promise<User | undefined> {
-    const [user] = await db.select().from(users).where(eq(users.username, username));
+    const [user] = await db.select()
+      .from(users)
+      .where(eq(users.username, username));
     return user || undefined;
   }
 
   async createUser(insertUser: InsertUser): Promise<User> {
-    const [user] = await db
-      .insert(users)
+    const [user] = await db.insert(users)
       .values(insertUser)
       .returning();
     return user;
