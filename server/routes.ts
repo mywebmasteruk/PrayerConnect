@@ -1,11 +1,21 @@
 import type { Express, Request, Response } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
+import { supabase } from "./supabase";
 import session from "express-session";
 import { z } from "zod";
 import { ZodError } from "zod-validation-error";
 import { insertPrayerSchema } from "@shared/schema";
 import MemoryStore from "memorystore";
+
+// Extend the Express session type to include our custom properties
+declare module 'express-session' {
+  interface SessionData {
+    userId?: string;
+    isAdmin?: boolean;
+    supabaseAccessToken?: string;
+  }
+}
 
 // Session store
 const MemoryStoreSession = MemoryStore(session);
@@ -122,17 +132,29 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Admin routes
   app.post('/api/admin/login', async (req: Request, res: Response) => {
     try {
-      const { password } = req.body;
+      const { email, password } = req.body;
       
-      // Simple password check - in production, use env variable and proper auth
-      const adminPassword = process.env.ADMIN_PASSWORD || 'admin123';
-      
-      if (password === adminPassword) {
-        req.session.isAdmin = true;
-        res.json({ success: true });
-      } else {
-        res.status(401).json({ message: 'Invalid password' });
+      if (!email || !password) {
+        return res.status(400).json({ message: 'Email and password are required' });
       }
+      
+      // Use Supabase authentication
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email,
+        password
+      });
+      
+      if (error) {
+        console.error('Supabase auth error:', error);
+        return res.status(401).json({ message: 'Invalid credentials' });
+      }
+      
+      // Set session after successful authentication
+      req.session.userId = data.user.id;
+      req.session.isAdmin = true;
+      req.session.supabaseAccessToken = data.session.access_token;
+      
+      res.json({ success: true, user: { email: data.user.email } });
     } catch (error) {
       console.error('Login error:', error);
       res.status(500).json({ message: 'Server error' });
@@ -220,15 +242,29 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Logout admin
-  app.post('/api/admin/logout', (req: Request, res: Response) => {
-    req.session.destroy((err) => {
-      if (err) {
-        console.error('Error destroying session:', err);
-        res.status(500).json({ message: 'Error logging out' });
-      } else {
-        res.json({ success: true });
+  app.post('/api/admin/logout', async (req: Request, res: Response) => {
+    try {
+      // Sign out of Supabase if we have a token
+      if (req.session.supabaseAccessToken) {
+        const { error } = await supabase.auth.signOut();
+        if (error) {
+          console.error('Error signing out of Supabase:', error);
+        }
       }
-    });
+      
+      // Destroy session regardless of Supabase result
+      req.session.destroy((err) => {
+        if (err) {
+          console.error('Error destroying session:', err);
+          res.status(500).json({ message: 'Error logging out' });
+        } else {
+          res.json({ success: true });
+        }
+      });
+    } catch (error) {
+      console.error('Logout error:', error);
+      res.status(500).json({ message: 'Error logging out' });
+    }
   });
 
   const httpServer = createServer(app);
