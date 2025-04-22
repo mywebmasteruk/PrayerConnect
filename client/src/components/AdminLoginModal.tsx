@@ -24,36 +24,54 @@ interface AdminLoginModalProps {
 }
 
 export default function AdminLoginModal({ isOpen, onClose }: AdminLoginModalProps) {
+  const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState(false);
+  const [errorMessage, setErrorMessage] = useState("Invalid credentials. Please try again.");
   const { toast } = useToast();
   const [_, navigate] = useLocation();
 
   const loginMutation = useMutation({
     mutationFn: async () => {
-      const response = await apiRequest("POST", "/api/admin/login", { password });
+      // Use our server API which leverages Supabase auth on the backend
+      const response = await apiRequest("POST", "/api/admin/login", { email, password });
       return response.json();
     },
-    onSuccess: () => {
+    onSuccess: (data) => {
       toast({
         title: "Login successful",
-        description: "You are now logged in as admin.",
+        description: `Welcome back, ${email}`,
       });
       onClose();
       navigate("/admin");
     },
-    onError: () => {
+    onError: (error: any) => {
       setError(true);
+      // If we have a specific error message from the server
+      if (error.message) {
+        setErrorMessage(error.message);
+      } else {
+        setErrorMessage("Invalid credentials. Please try again.");
+      }
+      
       toast({
         variant: "destructive",
         title: "Login failed",
-        description: "Invalid password. Please try again.",
+        description: "Invalid email or password. Please try again.",
       });
     },
   });
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    
+    // Basic validation
+    if (!email || !password) {
+      setError(true);
+      setErrorMessage("Email and password are required");
+      return;
+    }
+    
     setError(false);
     loginMutation.mutate();
   };
@@ -64,11 +82,23 @@ export default function AdminLoginModal({ isOpen, onClose }: AdminLoginModalProp
         <DialogHeader>
           <DialogTitle className="text-xl font-bold">Admin Login</DialogTitle>
           <DialogDescription>
-            Enter your admin password to access the admin panel.
+            Enter your email and password to access the admin panel.
           </DialogDescription>
         </DialogHeader>
         
         <form onSubmit={handleSubmit} className="space-y-4">
+          <div className="space-y-2">
+            <Label htmlFor="admin-email">Email</Label>
+            <Input
+              id="admin-email"
+              type="email"
+              placeholder="Enter admin email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              required
+            />
+          </div>
+          
           <div className="space-y-2">
             <Label htmlFor="admin-password">Password</Label>
             <Input
@@ -83,9 +113,9 @@ export default function AdminLoginModal({ isOpen, onClose }: AdminLoginModalProp
           
           {error && (
             <Alert variant="destructive">
-              <AlertTriangle className="h-4 w-4" />
+              <AlertTriangle className="h-4 w-4 mr-2" />
               <AlertDescription>
-                Invalid password. Please try again.
+                {errorMessage}
               </AlertDescription>
             </Alert>
           )}
