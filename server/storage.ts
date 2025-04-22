@@ -33,7 +33,7 @@ export class SupabaseStorage implements IStorage {
     if (search) {
       // Note: This is a simplified search - Supabase doesn't directly support OR with ILIKE
       // In a production app, you might want to use pg_trgm extension or a more complex query
-      query = query.ilike('content', `%${search}%`);
+      query = query.ilike('prayer', `%${search}%`);
     }
     
     const { data, error } = await query;
@@ -43,7 +43,13 @@ export class SupabaseStorage implements IStorage {
       return [];
     }
     
-    return data as Prayer[];
+    // Map the data structure to match what our app expects
+    return data.map((item: any) => ({
+      ...item,
+      content: item.prayer, // Map prayer field to content for compatibility
+      id: typeof item.id === 'string' ? parseInt(item.id) : item.id,
+      view_count: item.view_count || 0 // Default if not present
+    })) as Prayer[];
   }
 
   async getPrayer(id: number): Promise<Prayer | undefined> {
@@ -58,18 +64,22 @@ export class SupabaseStorage implements IStorage {
       return undefined;
     }
     
-    return data as Prayer;
+    return {
+      ...data,
+      content: data.prayer, // Map prayer field to content for compatibility
+      id: typeof data.id === 'string' ? parseInt(data.id) : data.id,
+      view_count: data.view_count || 0 // Default if not present
+    } as Prayer;
   }
 
   async createPrayer(insertPrayer: InsertPrayer): Promise<Prayer> {
     const { data, error } = await supabase
       .from('prayers')
       .insert({
-        content: insertPrayer.content,
+        prayer: insertPrayer.content,
         author: insertPrayer.author || 'Anonymous',
         category: insertPrayer.category,
         is_published: true,
-        view_count: 0,
         ameen_count: 0
       })
       .select()
@@ -80,7 +90,11 @@ export class SupabaseStorage implements IStorage {
       throw new Error('Failed to create prayer');
     }
     
-    return data as Prayer;
+    return {
+      ...data,
+      content: data.prayer, // Map prayer field to content for compatibility
+      id: typeof data.id === 'string' ? parseInt(data.id) : data.id
+    } as Prayer;
   }
 
   async updatePrayer(id: number, updates: Partial<Prayer>): Promise<Prayer | undefined> {

@@ -7,7 +7,8 @@ async function testPrayerTable() {
   const { data, error } = await supabase
     .from('prayers')
     .insert({
-      content: 'TEST PRAYER - PLEASE DELETE'
+      prayer: 'TEST PRAYER - PLEASE DELETE',
+      author: 'Test Author'
     })
     .select()
     .single();
