@@ -1,5 +1,6 @@
 import { prayers, type Prayer, type InsertPrayer, users, type User, type InsertUser } from "@shared/schema";
-import { neon } from "@neondatabase/serverless";
+import { eq, and, ilike, or, desc } from "drizzle-orm";
+import { db } from "./db";
 
 export interface IStorage {
   // Prayer operations
@@ -18,281 +19,128 @@ export interface IStorage {
   createUser(user: InsertUser): Promise<User>;
 }
 
-export class MemStorage implements IStorage {
-  private prayers: Map<number, Prayer>;
-  private users: Map<number, User>;
-  private prayerCurrentId: number;
-  private userCurrentId: number;
-
-  constructor() {
-    this.prayers = new Map();
-    this.users = new Map();
-    this.prayerCurrentId = 1;
-    this.userCurrentId = 1;
-  }
-
+export class DatabaseStorage implements IStorage {
   async getPrayers(page: number, limit: number, category?: string, search?: string): Promise<Prayer[]> {
-    let prayers = Array.from(this.prayers.values());
+    let query = db.select().from(prayers).where(eq(prayers.is_published, true));
     
-    // Filter by category if provided
-    if (category) {
-      prayers = prayers.filter(prayer => prayer.category === category);
+    if (category && category !== 'all') {
+      query = query.where(eq(prayers.category, category));
     }
-
-    // Filter by search term if provided
+    
     if (search) {
-      const searchLower = search.toLowerCase();
-      prayers = prayers.filter(prayer => 
-        prayer.content.toLowerCase().includes(searchLower) || 
-        prayer.author.toLowerCase().includes(searchLower)
+      query = query.where(
+        or(
+          ilike(prayers.content, `%${search}%`),
+          ilike(prayers.author || '', `%${search}%`)
+        )
       );
     }
-
-    // Sort by date (newest first)
-    prayers.sort((a, b) => {
-      const dateA = new Date(a.created_at ?? Date.now());
-      const dateB = new Date(b.created_at ?? Date.now());
-      return dateB.getTime() - dateA.getTime();
-    });
-
-    // Paginate
-    const startIndex = (page - 1) * limit;
-    return prayers.slice(startIndex, startIndex + limit);
+    
+    const prayerResults = await query
+      .orderBy(desc(prayers.created_at))
+      .limit(limit)
+      .offset((page - 1) * limit);
+    
+    return prayerResults;
   }
 
   async getPrayer(id: number): Promise<Prayer | undefined> {
-    return this.prayers.get(id);
+    const [prayer] = await db.select().from(prayers).where(eq(prayers.id, id));
+    return prayer;
   }
 
   async createPrayer(insertPrayer: InsertPrayer): Promise<Prayer> {
-    const id = this.prayerCurrentId++;
-    // Make sure to handle optional fields
-    const prayer: Prayer = { 
-      id,
-      content: insertPrayer.content,
-      author: insertPrayer.author || 'Anonymous',
-      category: insertPrayer.category || null,
-      is_published: true,
-      view_count: 0,
-      ameen_count: 0,
-      created_at: new Date()
-    };
-    this.prayers.set(id, prayer);
+    const [prayer] = await db.insert(prayers)
+      .values({
+        content: insertPrayer.content,
+        author: insertPrayer.author || 'Anonymous',
+        category: insertPrayer.category
+      })
+      .returning();
+    
     return prayer;
   }
 
   async updatePrayer(id: number, updates: Partial<Prayer>): Promise<Prayer | undefined> {
-    const prayer = this.prayers.get(id);
-    if (!prayer) return undefined;
-
-    const updatedPrayer = { ...prayer, ...updates };
-    this.prayers.set(id, updatedPrayer);
+    if (Object.keys(updates).length === 0) {
+      return this.getPrayer(id);
+    }
+    
+    const [updatedPrayer] = await db.update(prayers)
+      .set(updates)
+      .where(eq(prayers.id, id))
+      .returning();
+    
     return updatedPrayer;
   }
 
   async deletePrayer(id: number): Promise<boolean> {
-    return this.prayers.delete(id);
+    const result = await db.delete(prayers).where(eq(prayers.id, id)).returning();
+    return result.length > 0;
   }
 
   async incrementAmeenCount(id: number): Promise<boolean> {
-    const prayer = this.prayers.get(id);
+    const prayer = await this.getPrayer(id);
     if (!prayer) return false;
-
-    const updatedPrayer = { 
-      ...prayer, 
-      ameen_count: (prayer.ameen_count ?? 0) + 1 
-    };
-    this.prayers.set(id, updatedPrayer);
-    return true;
+    
+    const [result] = await db.update(prayers)
+      .set({ ameen_count: (prayer.ameen_count || 0) + 1 })
+      .where(eq(prayers.id, id))
+      .returning({ id: prayers.id });
+    
+    return !!result;
   }
 
   async incrementViewCount(id: number): Promise<boolean> {
-    const prayer = this.prayers.get(id);
+    const prayer = await this.getPrayer(id);
     if (!prayer) return false;
-
-    const updatedPrayer = { 
-      ...prayer, 
-      view_count: (prayer.view_count ?? 0) + 1 
-    };
-    this.prayers.set(id, updatedPrayer);
-    return true;
+    
+    const [result] = await db.update(prayers)
+      .set({ view_count: (prayer.view_count || 0) + 1 })
+      .where(eq(prayers.id, id))
+      .returning({ id: prayers.id });
+    
+    return !!result;
   }
 
   async getTotalPrayers(category?: string, search?: string): Promise<number> {
-    let prayers = Array.from(this.prayers.values());
+    let query = db.select({ count: db.fn.count() }).from(prayers)
+      .where(eq(prayers.is_published, true));
     
-    if (category) {
-      prayers = prayers.filter(prayer => prayer.category === category);
+    if (category && category !== 'all') {
+      query = query.where(eq(prayers.category, category));
     }
-
+    
     if (search) {
-      const searchLower = search.toLowerCase();
-      prayers = prayers.filter(prayer => 
-        prayer.content.toLowerCase().includes(searchLower) || 
-        prayer.author.toLowerCase().includes(searchLower)
+      query = query.where(
+        or(
+          ilike(prayers.content, `%${search}%`),
+          ilike(prayers.author || '', `%${search}%`)
+        )
       );
     }
-
-    return prayers.length;
+    
+    const [result] = await query;
+    return Number(result.count);
   }
 
   async getUser(id: number): Promise<User | undefined> {
-    return this.users.get(id);
+    const [user] = await db.select().from(users).where(eq(users.id, id));
+    return user || undefined;
   }
 
   async getUserByUsername(username: string): Promise<User | undefined> {
-    return Array.from(this.users.values()).find(
-      (user) => user.username === username,
-    );
+    const [user] = await db.select().from(users).where(eq(users.username, username));
+    return user || undefined;
   }
 
   async createUser(insertUser: InsertUser): Promise<User> {
-    const id = this.userCurrentId++;
-    const user: User = { ...insertUser, id };
-    this.users.set(id, user);
+    const [user] = await db
+      .insert(users)
+      .values(insertUser)
+      .returning();
     return user;
   }
 }
 
-export class SupabaseStorage implements IStorage {
-  private db;
-  
-  constructor() {
-    // Use the DATABASE_URL environment variable provided by Supabase
-    this.db = neon(process.env.DATABASE_URL || "");
-  }
-
-  async getPrayers(page: number, limit: number, category?: string, search?: string): Promise<Prayer[]> {
-    let query = `
-      SELECT * FROM prayers 
-      WHERE is_published = true
-    `;
-    
-    const params: any[] = [];
-    let paramIndex = 1;
-    
-    if (category) {
-      query += ` AND category = $${paramIndex}`;
-      params.push(category);
-      paramIndex++;
-    }
-    
-    if (search) {
-      query += ` AND (content ILIKE $${paramIndex} OR author ILIKE $${paramIndex})`;
-      params.push(`%${search}%`);
-      paramIndex++;
-    }
-    
-    query += ` ORDER BY created_at DESC LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`;
-    params.push(limit, (page - 1) * limit);
-    
-    const rows = await this.db(query, params);
-    return rows;
-  }
-
-  async getPrayer(id: number): Promise<Prayer | undefined> {
-    const rows = await this.db(
-      'SELECT * FROM prayers WHERE id = $1',
-      [id]
-    );
-    return rows[0];
-  }
-
-  async createPrayer(prayer: InsertPrayer): Promise<Prayer> {
-    const rows = await this.db(
-      `INSERT INTO prayers (content, author, category) 
-       VALUES ($1, $2, $3) 
-       RETURNING *`,
-      [prayer.content, prayer.author || 'Anonymous', prayer.category]
-    );
-    return rows[0];
-  }
-
-  async updatePrayer(id: number, updates: Partial<Prayer>): Promise<Prayer | undefined> {
-    const fields = Object.keys(updates);
-    const values = fields.map((field) => (updates as any)[field]);
-    
-    if (fields.length === 0) return this.getPrayer(id);
-    
-    const setClause = fields.map((field, i) => `${field} = $${i + 2}`).join(', ');
-    
-    const rows = await this.db(
-      `UPDATE prayers SET ${setClause} WHERE id = $1 RETURNING *`,
-      [id, ...values]
-    );
-    
-    return rows[0];
-  }
-
-  async deletePrayer(id: number): Promise<boolean> {
-    const result = await this.db(
-      'DELETE FROM prayers WHERE id = $1',
-      [id]
-    );
-    return Array.isArray(result) && result.length > 0;
-  }
-
-  async incrementAmeenCount(id: number): Promise<boolean> {
-    const result = await this.db(
-      'UPDATE prayers SET ameen_count = ameen_count + 1 WHERE id = $1 RETURNING id',
-      [id]
-    );
-    return Array.isArray(result) && result.length > 0;
-  }
-
-  async incrementViewCount(id: number): Promise<boolean> {
-    const result = await this.db(
-      'UPDATE prayers SET view_count = view_count + 1 WHERE id = $1 RETURNING id',
-      [id]
-    );
-    return Array.isArray(result) && result.length > 0;
-  }
-
-  async getTotalPrayers(category?: string, search?: string): Promise<number> {
-    let query = 'SELECT COUNT(*) FROM prayers WHERE is_published = true';
-    const params: any[] = [];
-    let paramIndex = 1;
-    
-    if (category) {
-      query += ` AND category = $${paramIndex}`;
-      params.push(category);
-      paramIndex++;
-    }
-    
-    if (search) {
-      query += ` AND (content ILIKE $${paramIndex} OR author ILIKE $${paramIndex})`;
-      params.push(`%${search}%`);
-    }
-    
-    const rows = await this.db(query, params);
-    return parseInt(rows[0].count);
-  }
-
-  async getUser(id: number): Promise<User | undefined> {
-    const rows = await this.db(
-      'SELECT * FROM users WHERE id = $1',
-      [id]
-    );
-    return rows[0];
-  }
-
-  async getUserByUsername(username: string): Promise<User | undefined> {
-    const rows = await this.db(
-      'SELECT * FROM users WHERE username = $1',
-      [username]
-    );
-    return rows[0];
-  }
-
-  async createUser(user: InsertUser): Promise<User> {
-    const rows = await this.db(
-      'INSERT INTO users (username, password) VALUES ($1, $2) RETURNING *',
-      [user.username, user.password]
-    );
-    return rows[0];
-  }
-}
-
-// Choose the storage implementation
-const useDatabase = process.env.USE_DATABASE === 'true';
-export const storage = useDatabase ? new SupabaseStorage() : new MemStorage();
+export const storage = new DatabaseStorage();
