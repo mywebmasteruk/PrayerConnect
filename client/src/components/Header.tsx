@@ -1,50 +1,20 @@
-import { useState } from 'react';
 import { Link } from "wouter";
-import { Button } from "@/components/ui/button";
 
 export default function Header() {
-  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
-  
-  const toggleMobileMenu = () => {
-    setIsMobileMenuOpen(!isMobileMenuOpen);
-  };
-
   return (
-    <header className="bg-white shadow-sm sticky top-0 z-10">
+    <header className="bg-white border-b border-gray-200">
       <div className="container mx-auto px-4 py-4 flex justify-between items-center">
         <Link href="/" className="flex items-center space-x-2">
-          <span className="material-icons text-primary text-3xl">auto_awesome</span>
-          <h1 className="text-xl md:text-2xl font-bold text-dark">Dua<span className="text-primary">Prayer</span></h1>
+          <svg className="h-6 w-6 text-gray-800" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M12 4V2M12 22V20M4 12H2M22 12H20M19.7778 19.7778L18.3636 18.3636M19.7778 4.2222L18.3636 5.6364M4.2222 19.7778L5.6364 18.3636M4.2222 4.2222L5.6364 5.6364M12 17C14.7614 17 17 14.7614 17 12C17 9.23858 14.7614 7 12 7C9.23858 7 7 9.23858 7 12C7 14.7614 9.23858 17 12 17Z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+          </svg>
+          <h1 className="text-lg font-medium text-gray-900">Du'aa Prayer</h1>
         </Link>
         
-        <nav className="hidden md:flex space-x-6 text-dark">
-          <Link href="/" className="font-medium hover:text-primary transition-colors">Home</Link>
-          <a href="#new-prayer" className="font-medium hover:text-primary transition-colors">New Prayer</a>
-          <a href="#prayers" className="font-medium hover:text-primary transition-colors">All Prayers</a>
-          <a href="#about" className="font-medium hover:text-primary transition-colors">About</a>
-        </nav>
-        
-        <Button 
-          variant="ghost"
-          size="icon"
-          onClick={toggleMobileMenu}
-          className="md:hidden text-dark"
-        >
-          <span className="material-icons">menu</span>
-        </Button>
+        <Link href="/admin" className="text-gray-600 hover:text-gray-900 text-sm font-medium">
+          Admin
+        </Link>
       </div>
-      
-      {/* Mobile Menu */}
-      {isMobileMenuOpen && (
-        <div className="md:hidden bg-white pb-4 border-t border-neutral-dark">
-          <nav className="container mx-auto px-4 flex flex-col space-y-3">
-            <Link href="/" className="py-2 font-medium hover:text-primary transition-colors">Home</Link>
-            <a href="#new-prayer" className="py-2 font-medium hover:text-primary transition-colors">New Prayer</a>
-            <a href="#prayers" className="py-2 font-medium hover:text-primary transition-colors">All Prayers</a>
-            <a href="#about" className="py-2 font-medium hover:text-primary transition-colors">About</a>
-          </nav>
-        </div>
-      )}
     </header>
   );
 }
