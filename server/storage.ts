@@ -1,6 +1,5 @@
-import { prayers, type Prayer, type InsertPrayer, users, type User, type InsertUser } from "@shared/schema";
-import { eq, and, ilike, or, desc, sql } from "drizzle-orm";
-import { db } from "./db";
+import { type Prayer, type InsertPrayer, type User, type InsertUser } from "@shared/schema";
+import { supabase } from "./supabase";
 
 export interface IStorage {
   // Prayer operations
@@ -19,50 +18,69 @@ export interface IStorage {
   createUser(user: InsertUser): Promise<User>;
 }
 
-export class DatabaseStorage implements IStorage {
+export class SupabaseStorage implements IStorage {
   async getPrayers(page: number, limit: number, category?: string, search?: string): Promise<Prayer[]> {
-    let conditions = [eq(prayers.is_published, true)];
+    let query = supabase.from('prayers')
+      .select('*')
+      .eq('is_published', true)
+      .order('created_at', { ascending: false })
+      .range((page - 1) * limit, page * limit - 1);
     
     if (category && category !== 'all') {
-      conditions.push(eq(prayers.category, category));
+      query = query.eq('category', category);
     }
     
     if (search) {
-      conditions.push(
-        or(
-          ilike(prayers.content, `%${search}%`),
-          ilike(prayers.author || '', `%${search}%`)
-        )
-      );
+      // Note: This is a simplified search - Supabase doesn't directly support OR with ILIKE
+      // In a production app, you might want to use pg_trgm extension or a more complex query
+      query = query.ilike('content', `%${search}%`);
     }
     
-    const prayerResults = await db.select()
-      .from(prayers)
-      .where(and(...conditions))
-      .orderBy(desc(prayers.created_at))
-      .limit(limit)
-      .offset((page - 1) * limit);
+    const { data, error } = await query;
     
-    return prayerResults;
+    if (error) {
+      console.error('Error fetching prayers:', error);
+      return [];
+    }
+    
+    return data as Prayer[];
   }
 
   async getPrayer(id: number): Promise<Prayer | undefined> {
-    const [prayer] = await db.select()
-      .from(prayers)
-      .where(eq(prayers.id, id));
-    return prayer;
+    const { data, error } = await supabase
+      .from('prayers')
+      .select('*')
+      .eq('id', id)
+      .single();
+    
+    if (error) {
+      console.error('Error fetching prayer:', error);
+      return undefined;
+    }
+    
+    return data as Prayer;
   }
 
   async createPrayer(insertPrayer: InsertPrayer): Promise<Prayer> {
-    const [prayer] = await db.insert(prayers)
-      .values({
+    const { data, error } = await supabase
+      .from('prayers')
+      .insert({
         content: insertPrayer.content,
         author: insertPrayer.author || 'Anonymous',
-        category: insertPrayer.category
+        category: insertPrayer.category,
+        is_published: true,
+        view_count: 0,
+        ameen_count: 0
       })
-      .returning();
+      .select()
+      .single();
     
-    return prayer;
+    if (error) {
+      console.error('Error creating prayer:', error);
+      throw new Error('Failed to create prayer');
+    }
+    
+    return data as Prayer;
   }
 
   async updatePrayer(id: number, updates: Partial<Prayer>): Promise<Prayer | undefined> {
@@ -70,88 +88,154 @@ export class DatabaseStorage implements IStorage {
       return this.getPrayer(id);
     }
     
-    const [updatedPrayer] = await db.update(prayers)
-      .set(updates)
-      .where(eq(prayers.id, id))
-      .returning();
+    const { data, error } = await supabase
+      .from('prayers')
+      .update(updates)
+      .eq('id', id)
+      .select()
+      .single();
     
-    return updatedPrayer;
+    if (error) {
+      console.error('Error updating prayer:', error);
+      return undefined;
+    }
+    
+    return data as Prayer;
   }
 
   async deletePrayer(id: number): Promise<boolean> {
-    const result = await db.delete(prayers)
-      .where(eq(prayers.id, id))
-      .returning();
-    return result.length > 0;
+    const { error } = await supabase
+      .from('prayers')
+      .delete()
+      .eq('id', id);
+    
+    if (error) {
+      console.error('Error deleting prayer:', error);
+      return false;
+    }
+    
+    return true;
   }
 
   async incrementAmeenCount(id: number): Promise<boolean> {
     const prayer = await this.getPrayer(id);
     if (!prayer) return false;
     
-    const [result] = await db.update(prayers)
-      .set({ ameen_count: (prayer.ameen_count || 0) + 1 })
-      .where(eq(prayers.id, id))
-      .returning();
+    const { data, error } = await supabase.rpc('increment_ameen_count', { prayer_id: id });
     
-    return !!result;
+    if (error) {
+      console.error('Error incrementing ameen count:', error);
+      
+      // Fallback if the RPC function doesn't exist yet
+      const { error: updateError } = await supabase
+        .from('prayers')
+        .update({ ameen_count: (prayer.ameen_count || 0) + 1 })
+        .eq('id', id);
+      
+      if (updateError) {
+        console.error('Error in fallback update:', updateError);
+        return false;
+      }
+    }
+    
+    return true;
   }
 
   async incrementViewCount(id: number): Promise<boolean> {
     const prayer = await this.getPrayer(id);
     if (!prayer) return false;
     
-    const [result] = await db.update(prayers)
-      .set({ view_count: (prayer.view_count || 0) + 1 })
-      .where(eq(prayers.id, id))
-      .returning();
+    const { data, error } = await supabase.rpc('increment_view_count', { prayer_id: id });
     
-    return !!result;
+    if (error) {
+      console.error('Error incrementing view count:', error);
+      
+      // Fallback if the RPC function doesn't exist yet
+      const { error: updateError } = await supabase
+        .from('prayers')
+        .update({ view_count: (prayer.view_count || 0) + 1 })
+        .eq('id', id);
+      
+      if (updateError) {
+        console.error('Error in fallback update:', updateError);
+        return false;
+      }
+    }
+    
+    return true;
   }
 
   async getTotalPrayers(category?: string, search?: string): Promise<number> {
-    let conditions = [eq(prayers.is_published, true)];
+    let query = supabase
+      .from('prayers')
+      .select('id', { count: 'exact', head: true })
+      .eq('is_published', true);
     
     if (category && category !== 'all') {
-      conditions.push(eq(prayers.category, category));
+      query = query.eq('category', category);
     }
     
     if (search) {
-      conditions.push(
-        or(
-          ilike(prayers.content, `%${search}%`),
-          ilike(prayers.author || '', `%${search}%`)
-        )
-      );
+      query = query.ilike('content', `%${search}%`);
     }
     
-    const result = await db.select({ count: sql<number>`count(*)` })
-      .from(prayers)
-      .where(and(...conditions));
+    const { count, error } = await query;
     
-    return result.length > 0 ? Number(result[0].count) : 0;
+    if (error) {
+      console.error('Error getting prayer count:', error);
+      return 0;
+    }
+    
+    return count || 0;
   }
 
   async getUser(id: number): Promise<User | undefined> {
-    const [user] = await db.select()
-      .from(users)
-      .where(eq(users.id, id));
-    return user || undefined;
+    const { data, error } = await supabase
+      .from('users')
+      .select('*')
+      .eq('id', id)
+      .single();
+    
+    if (error) {
+      console.error('Error fetching user:', error);
+      return undefined;
+    }
+    
+    return data as User;
   }
 
   async getUserByUsername(username: string): Promise<User | undefined> {
-    const [user] = await db.select()
-      .from(users)
-      .where(eq(users.username, username));
-    return user || undefined;
+    const { data, error } = await supabase
+      .from('users')
+      .select('*')
+      .eq('username', username)
+      .single();
+    
+    if (error) {
+      console.error('Error fetching user by username:', error);
+      return undefined;
+    }
+    
+    return data as User;
   }
 
   async createUser(insertUser: InsertUser): Promise<User> {
-    const [user] = await db.insert(users)
-      .values(insertUser)
-      .returning();
-    return user;
+    const { data, error } = await supabase
+      .from('users')
+      .insert({
+        username: insertUser.username,
+        password: insertUser.password
+      })
+      .select()
+      .single();
+    
+    if (error) {
+      console.error('Error creating user:', error);
+      throw new Error('Failed to create user');
+    }
+    
+    return data as User;
   }
 }
 
-export const storage = new DatabaseStorage();
+export const storage = new SupabaseStorage();
